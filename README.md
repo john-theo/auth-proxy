@@ -1,4 +1,4 @@
-![header](https://capsule-render.vercel.app/api?type=waving&color=6eed4c&height=300&section=header&text=AuthProxy&fontSize=90&fontAlignY=40&animation=fadeIn&desc=The%20Lightning-Fast%20API%20Gateway)
+![header](https://capsule-render.vercel.app/api?type=waving&color=6eed4c&height=300&section=header&text=AuthProxy&fontSize=90&fontAlignY=40&animation=fadeIn&desc=The%20Lightning-Fast%20API%20Authentication%20Gateway)
 
 <p align="center"> 
   <a href="README.md">English</a> 
