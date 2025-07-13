@@ -27,7 +27,7 @@
 **Protect your APIs in seconds, not minutes.** A blazing-fast, nginx-powered API gateway that stops malicious users dead in their tracks while keeping your legitimate traffic flowing smoothly.
 
 <p align="center">
-  <a href="https://hub.docker.com/r/johndope/docx-translator">
+  <a href="https://hub.docker.com/r/johndope/auth-proxy">
     <img src="https://img.shields.io/badge/docker-ready-blue?logo=docker&logoColor=white" alt="Docker Ready">
   </a>
   <a href="https://github.com/john-theo/auth-proxy">
