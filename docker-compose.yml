@@ -1,0 +1,45 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: api-gateway
+    ports:
+      - "${NGINX_EXTERNAL_PORT}:${NGINX_PORT}"
+    volumes:
+      # Mount the nginx template configuration
+      - ./nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
+      - ./api-keys.map:/etc/nginx/conf.d/api-keys.map:ro
+      # Mount our custom entrypoint script
+      - ./docker-entrypoint.sh:/entrypoint.sh:ro
+      # SSL certificates (if needed)
+      # - ./certs:/etc/nginx/certs:ro
+      # Logs (if needed)
+      # - ./logs/nginx:/var/log/nginx
+    env_file:
+      - .env
+    command: ["/bin/sh", "/entrypoint.sh"]
+    depends_on:
+      - backend
+    networks:
+      - api-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${NGINX_PORT}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Example backend service
+  backend:
+    image: mendhak/http-https-echo:37
+    container_name: backend-service
+    networks:
+      - api-network
+    expose:
+      - "${BACKEND_PORT}"
+    env_file:
+      - .env
+
+networks:
+  api-network:
+    driver: bridge

@@ -1,0 +1,8 @@
+# API key to username mappings
+default "";
+
+# API key mappings
+"sk-1234567890abcdef" "john_doe";
+"sk-abcdef1234567890" "jane_smith";
+"sk-0987654321fedcba" "bob_wilson";
+"sk-fedcba0987654321" "alice_cooper";

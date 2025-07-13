@@ -1,0 +1,175 @@
+# Note: MIME types and default_type are already configured in the main nginx.conf
+# No need to include them here as they would be duplicated
+
+# Custom log format for API tracking (if needed later)
+# log_format api '$remote_addr - $remote_user [$time_local] "$request" '
+#                '$status $body_bytes_sent "$http_referer" '
+#                '"$http_user_agent" "$http_x_forwarded_for" '
+#                'apikey="$http_x_apikey" username="$api_username"';
+
+# Note: Using default nginx access logging to avoid conflicts
+
+# === Application-Specific Settings ===
+
+# Note: Basic HTTP settings like client_max_body_size, keepalive_timeout, etc.
+# are already configured in the main nginx.conf to avoid duplicates
+
+# === Rate Limiting Configuration ===
+
+# Zone for unauthorized requests: configurable memory, requests per minute per IP
+# This is very restrictive to prevent brute force attacks
+limit_req_zone $binary_remote_addr zone=unauthorized:${RATE_LIMIT_MEMORY} rate=${UNAUTHORIZED_RATE_LIMIT};
+
+# Zone for authorized requests: configurable memory, requests per minute per API key
+# More permissive for legitimate API users
+limit_req_zone $http_x_apikey zone=authorized:${RATE_LIMIT_MEMORY} rate=${AUTHORIZED_RATE_LIMIT};
+
+# Global rate limit: configurable memory, requests per minute per IP
+# Acts as a fallback/safety net
+limit_req_zone $binary_remote_addr zone=global:${RATE_LIMIT_MEMORY} rate=${GLOBAL_RATE_LIMIT};
+
+# Returns HTTP 429 (Too Many Requests) when rate limit is exceeded
+limit_req_status 429;
+
+# === API Key Mapping ===
+
+# Configurable API key header name (default: x_apikey for X-APIKEY header)
+# Set API_KEY_HEADER to header name in lowercase with underscores (e.g., x_apikey, x_api_key)
+# Set API_KEY_HEADER_NAME to actual header name for proxy_set_header (e.g., X-APIKEY, X-API-KEY)
+
+# Maps API keys to usernames from an external file
+# The file should contain lines like: "api-key-123" "john_doe";
+map $http_x_apikey $api_username {
+    include /etc/nginx/conf.d/api-keys.map;
+}
+
+# Determines if a request is authorized based on whether username exists
+# Returns 0 (unauthorized) by default, 1 if username is found
+map $api_username $api_authorized {
+    default 0;
+    ~.+ 1;  # Regular expression: matches any non-empty string
+}
+
+# Selects which rate limit zone to use based on authorization status
+map $api_authorized $rate_limit_zone {
+    0 unauthorized;  # Strict limits for unauthorized
+    1 authorized;    # Relaxed limits for authorized
+}
+
+# === Backend Configuration ===
+
+# Defines the actual backend server(s) to proxy requests to
+upstream backend_upstream {
+    # Backend server with configurable host and port, with health checking
+    server ${BACKEND_HOST}:${BACKEND_PORT} max_fails=${BACKEND_MAX_FAILS} fail_timeout=${BACKEND_FAIL_TIMEOUT};
+    
+    # Connection pooling settings for better performance
+    keepalive ${BACKEND_KEEPALIVE_CONNECTIONS};              # Keep connections open
+    keepalive_requests ${BACKEND_KEEPALIVE_REQUESTS};    # Reuse each connection for up to requests
+    keepalive_timeout ${BACKEND_KEEPALIVE_TIMEOUT};     # Keep connections open for time
+}
+
+# === Internal Server for Unauthorized Responses ===
+
+# This clever setup creates an internal server just for returning 401 errors
+server {
+    # Only listens on localhost with configurable port (not accessible from outside)
+    listen 127.0.0.1:${INTERNAL_AUTH_PORT};
+    server_name localhost;
+    
+    location / {
+        # Apply the strict rate limiting for unauthorized requests
+        limit_req zone=unauthorized;
+        
+        # If not rate-limited, return 401 Unauthorized
+        add_header Content-Type application/json always;
+        return 401 '{"error": "Unauthorized: Invalid or missing API key"}\n';
+    }
+}
+
+# Upstream definition pointing to the internal 401 server
+upstream unauthorized_upstream {
+    server 127.0.0.1:${INTERNAL_AUTH_PORT};
+}
+
+# === Main Public-Facing Server ===
+
+server {
+    # Listen on configurable port (standard HTTP)
+    listen ${NGINX_PORT};
+    
+    # Catch-all server name (handles all domains)
+    server_name _;
+    
+    # === Security Headers ===
+    
+    # Prevents MIME type sniffing
+    add_header X-Content-Type-Options nosniff;
+    
+    # Prevents clickjacking by disabling iframe embedding
+    add_header X-Frame-Options DENY;
+    
+    # Enables browser XSS protection
+    add_header X-XSS-Protection "1; mode=block";
+    
+    # === Health Check Endpoint ===
+    
+    # Simple endpoint for monitoring/load balancer health checks
+    location /health {
+        access_log off;           # Don't log health checks
+        return 200 "OK\n";       # Always return 200 OK
+        add_header Content-Type text/plain;
+    }
+
+    # === Main API Proxy Location ===
+    
+    location / {
+        # Apply rate limiting for authorized requests (with burst handling)
+        # burst: allow short bursts up to requests
+        # nodelay: process burst requests immediately
+        limit_req zone=authorized burst=${AUTHORIZED_BURST} nodelay;
+        
+        # Conditional routing based on authorization
+        # If not authorized, proxy to the internal 401 server
+        if ($api_authorized = 0) {
+            proxy_pass http://unauthorized_upstream;
+        }
+        
+        # === Proxy Headers ===
+        
+        # Add username header so backend knows who's making the request
+        proxy_set_header X-USERNAME $api_username;
+        
+        # Standard proxy headers for proper request forwarding
+        proxy_set_header Host $host;                           # Original host
+        proxy_set_header X-Real-IP $remote_addr;              # Client's real IP
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;  # Full proxy chain
+        proxy_set_header X-Forwarded-Proto $scheme;           # HTTP or HTTPS
+        
+        # Security: Remove API key before sending to backend
+        # Backend only needs username, not the actual key
+        proxy_set_header X-APIKEY "";
+        
+        # === Backend Proxy Configuration ===
+        
+        # Forward request to the backend servers
+        proxy_pass http://backend_upstream;
+        
+        # Use HTTP/1.1 for better performance
+        proxy_http_version 1.1;
+        
+        # Disable connection header for keepalive to work properly
+        proxy_set_header Connection "";
+        
+        # === Timeout Settings ===
+        
+        # Time to establish connection to backend
+        proxy_connect_timeout ${PROXY_CONNECT_TIMEOUT};
+        
+        # Time to send request to backend
+        proxy_send_timeout ${PROXY_SEND_TIMEOUT};
+        
+        # Time to receive response from backend
+        proxy_read_timeout ${PROXY_READ_TIMEOUT};
+    }
+} 
